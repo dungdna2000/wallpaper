@@ -24,12 +24,12 @@ using namespace Gdiplus;
 #pragma comment (lib,"Gdiplus.lib")
 
 
-#define WINDOW_CLASS_NAME L"HomeCredit.Wallpaper"
+#define WINDOW_CLASS_NAME L"DungDNA2000.Wallpaper"
 #define WINDOW_TITLE L"Wallpaper"
 #define WINDOW_TITLE_FOREGROUND L"Hidden foreground window"
 
 
-#define MUTEX_NAME L"Global\\HomeCredit.Wallpaper"
+#define MUTEX_NAME L"Global\\DungDNA2000.Wallpaper"
 
 #define WM_KILL_MESSAGE (WM_USER + 100)
 #define WM_DISPLAYCHANGE_FWD (WM_USER + 101)
