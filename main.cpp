@@ -25,7 +25,7 @@ using namespace Gdiplus;
 
 
 #define WINDOW_CLASS_NAME L"HomeCredit.Wallpaper"
-#define WINDOW_TITLE L"Wall paper"
+#define WINDOW_TITLE L"Wallpaper"
 #define WINDOW_TITLE_FOREGROUND L"Hidden foreground window"
 
 
@@ -34,21 +34,28 @@ using namespace Gdiplus;
 #define WM_KILL_MESSAGE (WM_USER + 100)
 #define WM_DISPLAYCHANGE_FWD (WM_USER + 101)
 
-
-void DrawBgImage(HWND);
-void FillSolidColor(HWND, int, int, int);
+void OnPaint(HWND);
 void CreateWindows(HWND&, HWND&);
 
 
-HWND hWnd = 0;
-HWND hWndPrev = 0;
+// HWND of the main wallpaper window
+HWND hWndWallpaper = 0;
 
-HWND hWndForeGround = 0;
+// HWND of the hidden foreground window, 
+// the foreground window sole job is to forward WM_DISPLAYCHANGE to the wallpaper window
+HWND hWndForeGround = 0;		
 
+// The background image path set from command line
+LPWSTR imgPathBackground = NULL;
+
+// The background image loaded from the image file 
 Bitmap* imgBackground = NULL;
-LPWSTR imgPathBackground;
 
-BOOL bWPNeedRedraw = FALSE;
+// The background color specified by -c option from command line 
+Color colorBackground(0, 0, 0);
+
+// Mutex used to communicate between existing and new process 
+HANDLE hMutex = 0;
 
 // GDI+
 GdiplusStartupInput gdiplusStartupInput;
@@ -61,7 +68,7 @@ void InitGdi() {
 }
 
 
-// DEBUG SUPPORT FUNCTIONS //////////////
+// SOME UTILITIES FUNCTIONS 
 #define _W(x)  __W(x)
 #define __W(x)  L##x
 
@@ -86,6 +93,9 @@ void err(const wchar_t* fmt, ...)
 	wcerr << s;
 }
 
+/*
+*  Split a string into sub-strings separated by {delimeter}
+*/
 vector<string> split(string line, string delimeter)
 {
 	vector<string> tokens;
@@ -115,7 +125,6 @@ void PrintRect(const RECT& r) {
 	cout << r.left << " " << r.top << " " << r.right << " " << r.bottom << endl;
 }
 
-//////////////////////////////////////////
 
 LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
@@ -124,11 +133,8 @@ LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		PAINTSTRUCT ps; 		
 		BeginPaint(hWnd, &ps);
 		
-		if (hWnd == ::hWnd) {
-			//log(L"hWnd > WM_PAINT\n");
-			if (::imgBackground != NULL) {
-				DrawBgImage(::hWnd);
-			}
+		if (hWnd == ::hWndWallpaper) {
+			OnPaint(::hWndWallpaper);
 		}
 
 		EndPaint(hWnd,&ps);
@@ -138,9 +144,9 @@ LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 
 	case WM_DISPLAYCHANGE_FWD:
-		if (hWnd == ::hWnd) {
+		if (hWnd == ::hWndWallpaper) {
 			RECT vScreen = GetVirtualScreenRect();
-			SetWindowPos(::hWnd, NULL, 
+			SetWindowPos(::hWndWallpaper, NULL, 
 				vScreen.left, 
 				vScreen.top,
 				vScreen.right - vScreen.left,
@@ -151,7 +157,7 @@ LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		break;
 	case WM_DISPLAYCHANGE:
 		if (hWnd == ::hWndForeGround) {
-			SendMessage(::hWnd, WM_DISPLAYCHANGE_FWD, 0, 0);
+			SendMessage(::hWndWallpaper, WM_DISPLAYCHANGE_FWD, 0, 0);
 		}
 		break;
 	case WM_DESTROY:
@@ -162,6 +168,7 @@ LRESULT CALLBACK WinProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 	}
 	return 0;
 }
+
 
 HWND FindLastWorkerW(int level, HWND hwndParent) {
 	HWND hwndChild = 0;
@@ -178,23 +185,27 @@ HWND FindLastWorkerW(int level, HWND hwndParent) {
 }
 
 /*
-*  Find this wall paper window under WorkerW 
+*  Find this wallpaper window under WorkerW windows
 */
-HWND FindMe(HWND hwndParent) {
-	HWND hwndChild = 0;
-	HWND hwndRes = 0;
+HWND FindMe() {
+	HWND hWndChild = 0;
+	HWND hWndRes = 0;
+	HWND hWndParent = GetDesktopWindow();
 	do {
-		hwndChild = FindWindowEx(hwndParent, hwndChild, L"WorkerW", 0);
-		if (hwndChild) {
-			hwndRes = FindWindowEx(hwndChild, 0, WINDOW_CLASS_NAME, 0);
-			if (hwndRes) return hwndRes;
+		hWndChild = FindWindowEx(hWndParent, hWndChild, L"WorkerW", 0);
+		if (hWndChild) {
+			hWndRes = FindWindowEx(hWndChild, 0, WINDOW_CLASS_NAME, 0);
+			if (hWndRes) return hWndRes;
 		}
-	} while (hwndChild);
+	} while (hWndChild);
 
 	return 0;
 }
 
-void CreateWindows(HWND &hWnd, HWND &hWndForeground) {
+/*
+*   Create the wallpaper window and the hidden foreground window
+*/
+void CreateWindows(HWND &hWndWallpaper, HWND &hWndForeground) {
 
 	HINSTANCE hInstance = GetModuleHandle(NULL);
 
@@ -220,7 +231,7 @@ void CreateWindows(HWND &hWnd, HWND &hWndForeground) {
 
 	RECT vScreen = GetVirtualScreenRect();
 
-	hWnd =
+	hWndWallpaper =
 		CreateWindow(
 			WINDOW_CLASS_NAME,
 			WINDOW_TITLE,
@@ -234,7 +245,7 @@ void CreateWindows(HWND &hWnd, HWND &hWndForeground) {
 			hInstance,
 			NULL);
 
-	if (!hWnd) {
+	if (!hWndWallpaper) {
 		DWORD ErrCode = GetLastError();
 		err((wchar_t*)L"Failed to create wallpaper window ErrCode: %d\nAt: %s %d \n", ErrCode, _W(__FILE__), __LINE__);
 		return;
@@ -277,30 +288,10 @@ void CreateWindows(HWND &hWnd, HWND &hWndForeground) {
 		return;
 	}
 
-	SetParent(hWnd, hwndWorkerW);
+	SetParent(hWndWallpaper, hwndWorkerW);
 
-	ShowWindow(hWnd, SW_SHOW);
-	UpdateWindow(hWnd);
-}
-
-HWND GetWallPaperWindow(HINSTANCE hInstance, HWND &hWndPrev)
-{
-
-	HWND hwndDesktop = GetDesktopWindow();
-	HWND hWnd = FindMe(hwndDesktop);
-	if (hWnd) {
-		log(L"INFO: Found existing wallpaper!\n");
-		hWndPrev = hWnd;
-		return hWnd;
-	}
-
-	CreateMutex(NULL, FALSE, MUTEX_NAME);
-
-	hWndPrev = 0;
-
-	CreateWindows(hWnd,::hWndForeGround);
-
-	return hWnd;
+	ShowWindow(hWndWallpaper, SW_SHOW);
+	UpdateWindow(hWndWallpaper);
 }
 
 
@@ -321,19 +312,30 @@ wchar_t* ToWSTR(const char * st)
 }
 
 
+/*
+*  Cleanup before quitting
+*/
 void CleanUp() {
 
 	if (::imgBackground != NULL) delete ::imgBackground;
 
-	SetParent(hWnd, GetDesktopWindow());
-	ShowWindow(hWnd, SW_HIDE);
-	CloseWindow(hWnd);
+	if (::hWndWallpaper) {
+		SetParent(::hWndWallpaper, GetDesktopWindow());
+		ShowWindow(::hWndWallpaper, SW_HIDE);
+		UpdateWindow(::hWndWallpaper);
+		DestroyWindow(::hWndWallpaper);
+	}
+	
+	if (::hWndForeGround) DestroyWindow(::hWndForeGround);
 
 	if (gdiplusToken) {
 		Gdiplus::GdiplusShutdown(gdiplusToken);
 	}
 }
 
+/*
+*   Main application message loop
+*/
 void Run() {
 	MSG msg;
 	int done = 0;
@@ -353,9 +355,12 @@ void Run() {
 	log(L"Bye!\n");
 }
 
-void DrawBgImage(HWND hWnd) {
+/*
+*   Handle WM_PAINT event from wallpaper window
+*/
+void OnPaint(HWND hWnd) {
 
-	HDC hdc = GetWindowDC(hWnd);
+	HDC hdc = GetDC(hWnd);
 	Gdiplus::Graphics* graphics = new Gdiplus::Graphics(hdc);
 
 	RECT vScreen = GetVirtualScreenRect();
@@ -378,40 +383,30 @@ void DrawBgImage(HWND hWnd) {
 	}, (LPARAM)recMonitors);
 
 	//
-	// Draw background image into each intersect rectangle with monitor, a.k.a draw on each monitor
+	// Draw background image or fill background color into each intersect rectangle with monitor, a.k.a draw on each monitor
 	//
 	RECT rIntersect;
 	for (RECT rMonitor : *recMonitors) {
 		
 		if (IntersectRect(&rIntersect, &rMonitor, &vScreen)) {
-			Gdiplus::Status s = graphics->DrawImage(::imgBackground, (INT)rIntersect.left, (INT)rIntersect.top, 
-				(INT)(rIntersect.right - rIntersect.left), (INT)(rIntersect.bottom - rIntersect.top));
+
+			if (::imgBackground == NULL) {
+				Gdiplus::SolidBrush brush(::colorBackground);
+				
+				Gdiplus::Rect rect(
+					(INT)rIntersect.left, (INT)rIntersect.top,
+					(INT)(rIntersect.right - rIntersect.left), (INT)(rIntersect.bottom - rIntersect.top));
+				graphics->FillRectangle(&brush, rect);
+			} 
+			else {
+				graphics->DrawImage(::imgBackground, (INT)rIntersect.left, (INT)rIntersect.top,
+					(INT)(rIntersect.right - rIntersect.left), (INT)(rIntersect.bottom - rIntersect.top));
+			}
+			
 		}
 	}
-}
 
-void FillSolidColor(HWND hWnd, int R, int G, int B) {
-
-	HDC hdc = GetDC(hWnd);
-	if (!hdc) {
-		err(L"ERROR Failed to retrieve HDC hWnd = %s", hWnd);
-		return;
-	}
-
-	RECT vScreen = GetVirtualScreenRect();
-
-	Gdiplus::Graphics* graphics = new Gdiplus::Graphics(hdc);
-
-	Gdiplus::SolidBrush * brush = new Gdiplus::SolidBrush(Color(255, R, G, B)); 
-
-	Gdiplus::Rect rect(vScreen.left, vScreen.top, vScreen.right - vScreen.left, vScreen.bottom - vScreen.left);
-
-	graphics->FillRectangle(brush, rect);
-
-	// Release resources
-	delete brush;
 	delete graphics;
-	ReleaseDC(hWnd, hdc);
 }
 
 void doDebug() {
@@ -419,10 +414,20 @@ void doDebug() {
 }
 
 void printUsage() {
-	cout << "Usage: wallpaper [-c red green blue] | [path/to/your/image]" << endl;
-	cout << "Examples: " << endl;
-	cout << "wallpaper -c 64 64 64" << endl;
-	cout << "wallpaper c:\\images\\bg.jpg" << endl;
+	cout << "Usage: " << endl; 
+	cout << "\n(A) Set solid background RGB color" << endl;
+	cout << "Syntax: " << endl; 
+	cout << "  wallpaper -c Red Greed Blue" << endl;
+	cout << "Example: " << endl;
+	cout << "  wallpaper -c 128 64 64" << endl;
+	cout << "\n(B) Set an image as background" << endl;
+	cout << "Syntax:  wallpaper path/to/your/image" << endl;
+	cout << "Example: " << endl;
+	cout << "  wallpaper c:\\images\\bg.jpg" << endl;
+
+	cout << "\n(C) Kill existing wallpaper" << endl;
+	cout << "Syntax: " << endl;
+	cout << "  wallpaper -k" << endl;
 }
 void printAbout() {
 	cout << "Small utility to set wallpaper in case you cannot change your wallpaper using Windows personalize settings" << endl;
@@ -431,10 +436,77 @@ void printAbout() {
 }
 
 void printError() {
-	err(L"ERROR: Invalid number of arguments or invalid argument\n");
+	err(L"ERROR: Invalid number of arguments or invalid argument\n\n");
 	printUsage();
 }
 
+/*
+*   Kill previous wallpaper (i.e. -k option)
+*/
+void KillPrev() {
+
+	HWND hWndWallpaper = FindMe();
+	if (hWndWallpaper) {
+		HANDLE hMutex = OpenMutex(MUTEX_ALL_ACCESS, FALSE, MUTEX_NAME);
+		if (!hMutex) {
+			err(L"FATAL: Mutex %s is NULL!\n", MUTEX_NAME);
+			return;
+		}
+
+		PostMessage(hWndWallpaper, WM_KILL_MESSAGE, 0, 0);
+
+		CloseHandle(hMutex);
+
+		//log(L"Killed!\n");
+	}
+	else
+	{
+		err(L"Wallpaper window not found.\n ");
+	}
+}
+
+void HandleSetColorBG(int argc, char* argv[]) {
+	if (FindMe()) {
+		KillPrev();
+	}
+
+	InitGdi();
+	::colorBackground = Gdiplus::Color(atoi(argv[2]), atoi(argv[3]), atoi(argv[4]));
+	::hMutex = CreateMutex(NULL, FALSE, MUTEX_NAME);
+
+	CreateWindows(::hWndWallpaper, ::hWndForeGround);
+
+	Run();
+}
+
+void HandleSetImageBG(int argc, char* argv[]) {
+
+	if (FindMe()) {
+		KillPrev();
+	}
+
+	::hMutex = CreateMutex(NULL, FALSE, MUTEX_NAME);
+	
+	char* imagePath = argv[1];
+	std::filesystem::path filePath(imagePath);
+	if (!std::filesystem::exists(imagePath)) {
+		err(L"FATAL: Image file cannot be found: %s\n", ToWSTR(imagePath));
+		return;
+	}
+
+	InitGdi();
+	::imgPathBackground = ToWSTR(imagePath);
+
+	::imgBackground = new Bitmap(::imgPathBackground);
+	if (::imgBackground == NULL) {
+		err(L"FATAL: Failed to load image file %s \n Is it a valid image?", ::imgPathBackground);
+		return;
+	}
+
+	CreateWindows(::hWndWallpaper, ::hWndForeGround);
+
+	Run();
+}
 
 int main(int argc, char* argv[]) {
 	if (argc == 1) {
@@ -446,22 +518,15 @@ int main(int argc, char* argv[]) {
 
 	if (argc == 5) {
 		if (strcmp(argv[1], "-c")==0) {
-			::hWnd = GetWallPaperWindow(GetModuleHandle(NULL), hWndPrev);
 
-			InitGdi();
-			FillSolidColor(::hWnd,atoi(argv[2]), atoi(argv[3]), atoi(argv[4]));
-
-			if (!hWndPrev) {
-				Run();
-			}
+			HandleSetColorBG(argc, argv);
 			return 0;
 		}
 		else
 		{
 			printError();
-			return 0;
+			return 1;
 		}
-
 	}
 
 	if (argc == 2) {
@@ -471,54 +536,11 @@ int main(int argc, char* argv[]) {
 		}
 
 		if (strcmp(argv[1], "-k") == 0) {
-			hWnd = FindMe(GetDesktopWindow());
-			if (hWnd) {
-				HANDLE hMutex = OpenMutex(MUTEX_ALL_ACCESS, FALSE, MUTEX_NAME);
-				if (!hMutex) {
-					cout << "ERROR: hMutex is NULL!" << endl;
-					return 1;
-				}
-
-				PostMessage(hWnd, WM_KILL_MESSAGE, 0, 0);
-				cout << "Wallpaper killed!" << endl;
-
-				CloseHandle(hMutex);
-
-				return 0;
-			}
-			else
-			{
-				cout << "No wallpaper window found. " << endl;
-				return 1;
-			}
+			KillPrev();
+			return 0;
 		}
 
-		hWnd = GetWallPaperWindow(GetModuleHandle(NULL), hWndPrev);
-
-		char* imagePath = argv[1];
-
-		std::filesystem::path filePath(imagePath);
-		if (!std::filesystem::exists(imagePath)) {
-			err(L"FATAL: Image file cannot be found: %s\n", ToWSTR(imagePath));
-			return 1;
-		}
-
-		::imgPathBackground = ToWSTR(imagePath);
-		if (imgBackground != NULL) {
-			delete imgBackground;
-		}
-
-		InitGdi();
-		::imgBackground = new Bitmap(::imgPathBackground);
-		if (::imgBackground == NULL) {
-			err(L"FATAL Failed to load image file %s", ::imgPathBackground);
-			return 1;
-		}
-
-		if (!hWndPrev) {
-			Run();
-		}
-
+		HandleSetImageBG(argc, argv);
 		return 0;
 	}
 
