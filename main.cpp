@@ -320,10 +320,15 @@ void CleanUp() {
 	if (::imgBackground != NULL) delete ::imgBackground;
 
 	if (::hWndWallpaper) {
-		SetParent(::hWndWallpaper, GetDesktopWindow());
-		ShowWindow(::hWndWallpaper, SW_HIDE);
-		UpdateWindow(::hWndWallpaper);
+		SetParent(::hWndWallpaper, NULL);
 		DestroyWindow(::hWndWallpaper);
+
+		//
+		// This is IMPORTANT for Progman to "refresh", otherwise it is stuck until system refresh occurs
+		//  
+		HWND hwndProgman = FindWindowEx(GetDesktopWindow(), 0, L"Progman", 0);
+		SendMessage(hwndProgman, 0x052C, 0xD, 0);
+		SendMessage(hwndProgman, 0x052C, 0xD, 1);
 	}
 	
 	if (::hWndForeGround) DestroyWindow(::hWndForeGround);
@@ -332,7 +337,6 @@ void CleanUp() {
 		Gdiplus::GdiplusShutdown(gdiplusToken);
 	}
 }
-
 /*
 *   Main application message loop
 */
@@ -352,7 +356,6 @@ void Run() {
 	}
 
 	CleanUp();
-	log(L"Bye!\n");
 }
 
 /*
@@ -409,10 +412,6 @@ void OnPaint(HWND hWnd) {
 	delete graphics;
 }
 
-void doDebug() {
-
-}
-
 void printUsage() {
 	cout << "Usage: " << endl; 
 	cout << "\n(A) Set solid background RGB color" << endl;
@@ -461,7 +460,7 @@ void KillPrev() {
 	}
 	else
 	{
-		err(L"Wallpaper window not found.\n ");
+		err(L"ERROR: Wallpaper window not found.\n ");
 	}
 }
 
@@ -484,6 +483,7 @@ void HandleSetImageBG(int argc, char* argv[]) {
 	if (FindMe()) {
 		KillPrev();
 	}
+	InitGdi();
 
 	::hMutex = CreateMutex(NULL, FALSE, MUTEX_NAME);
 	
@@ -494,7 +494,6 @@ void HandleSetImageBG(int argc, char* argv[]) {
 		return;
 	}
 
-	InitGdi();
 	::imgPathBackground = ToWSTR(imagePath);
 
 	::imgBackground = new Bitmap(::imgPathBackground);
@@ -530,11 +529,6 @@ int main(int argc, char* argv[]) {
 	}
 
 	if (argc == 2) {
-		if (strcmp(argv[1], "-d") == 0) {
-			doDebug();
-			return 0;
-		}
-
 		if (strcmp(argv[1], "-k") == 0) {
 			KillPrev();
 			return 0;
