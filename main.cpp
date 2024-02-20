@@ -17,11 +17,14 @@
 #include <thread>
 
 #include <gdiplus.h>
+#include <shobjidl.h> 
+
 
 using namespace std;
 using namespace Gdiplus;
 
 #pragma comment (lib,"Gdiplus.lib")
+#pragma comment(lib, "Comctl32.lib")
 
 
 #define WINDOW_CLASS_NAME L"DungDNA2000.Wallpaper"
@@ -123,6 +126,13 @@ RECT GetVirtualScreenRect() {
 
 void PrintRect(const RECT& r) {
 	cout << r.left << " " << r.top << " " << r.right << " " << r.bottom << endl;
+}
+
+char* ToStr(LPWSTR wstr) {
+	int size_needed = WideCharToMultiByte(CP_UTF8, 0, wstr, -1, NULL, 0, NULL, NULL);
+	char* res = new char[size_needed];
+	WideCharToMultiByte(CP_UTF8, 0, wstr, -1, res, size_needed, NULL, NULL);
+	return res;
 }
 
 
@@ -507,10 +517,80 @@ void HandleSetImageBG(int argc, char* argv[]) {
 	Run();
 }
 
+
+PWSTR getFilePath() {
+
+	HRESULT hr = CoInitializeEx(NULL, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+	if (FAILED(hr)) {
+		err(L"FATAL: COM initialization failed!\n");
+		return NULL;
+	}
+
+	IFileOpenDialog* pFileOpen;
+	hr = CoCreateInstance(CLSID_FileOpenDialog, NULL, CLSCTX_ALL, IID_IFileOpenDialog, reinterpret_cast<void**>(&pFileOpen));
+	if (FAILED(hr)) {
+		err(L"FATAL: Failed to create FileOpenDialog!");
+		CoUninitialize();
+		return NULL;
+	}
+
+	// Set file types filter
+	COMDLG_FILTERSPEC fileTypes[] = { { L"JPEG", L"*.jpeg;*.jpg" }, { L"PNG", L"*.png" } };
+	hr = pFileOpen->SetFileTypes(ARRAYSIZE(fileTypes), fileTypes);
+	if (FAILED(hr)) {
+		err(L"FATAL: Failed to set file types filter\n");
+		pFileOpen->Release();
+		CoUninitialize();
+		return NULL;
+	}
+
+	pFileOpen->SetTitle(L"Wallpaper image file");
+
+	// Show the file open dialog
+	hr = pFileOpen->Show(NULL);
+	if (FAILED(hr)) {
+		err(L"FATAL: Failed to show FileOpenDialog!\n");
+		pFileOpen->Release();
+		CoUninitialize();
+		return NULL;
+	}
+
+	// Retrieve the selected file
+	IShellItem* pItem;
+	hr = pFileOpen->GetResult(&pItem);
+	if (FAILED(hr)) {
+		err(L"FATAL: Failed to get selected file!\n");
+		pFileOpen->Release();
+		CoUninitialize();
+		return NULL;
+	}
+
+	// Get the file path
+	PWSTR filePath;
+	hr = pItem->GetDisplayName(SIGDN_FILESYSPATH, &filePath);
+	if (FAILED(hr)) {
+		err(L"FATAL: Failed to get file path\n");
+		pItem->Release();
+		pFileOpen->Release();
+		CoUninitialize();
+		return NULL;
+	}
+
+	pItem->Release();
+	pFileOpen->Release();
+	CoUninitialize();
+
+	return filePath;
+}
+
 int main(int argc, char* argv[]) {
+
+	PWSTR filePath; 
+
+	// if no file is specified, call OpenFileDialog to let user select an image file
 	if (argc == 1) {
-		printAbout();
-		return 0;
+		argc = 2;
+		argv[1] = ToStr(getFilePath());
 	}
 
 	SetProcessDPIAware();
@@ -534,11 +614,43 @@ int main(int argc, char* argv[]) {
 			return 0;
 		}
 
-		HandleSetImageBG(argc, argv);
+		ShellExecute(NULL, L"open", L"explorer.exe", L"shell:::{3080F90D-D7AD-11D9-BD98-0000947B0257}", NULL, SW_SHOWDEFAULT);
+		HandleSetImageBG(argc, argv);		
+
+		//HWND hwndShell = FindWindow(L"Shell_TrayWnd", NULL);
+
+		// Send the command to show the desktop
+		//SendMessage(hwndShell, WM_COMMAND, (WPARAM)0x7402, 0);
+
 		return 0;
 	}
 
 	printError();
 	return 1;
 
+}
+
+
+int WINAPI WinMain(
+	_In_ HINSTANCE hInstance,
+	_In_opt_ HINSTANCE hPrevInstance,
+	_In_ LPSTR lpCmdLine,
+	_In_ int nCmdShow
+) {
+	int numArgs;
+	LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &numArgs);
+
+	int argc = numArgs;
+	char** argv_ansi = new char* [argc];
+	for (int i = 0; i < argc; ++i)
+	{
+		//int size_needed = WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, NULL, 0, NULL, NULL);
+		//argv_ansi[i] = new char[size_needed];
+		//WideCharToMultiByte(CP_UTF8, 0, argv[i], -1, argv_ansi[i], size_needed, NULL, NULL);
+		argv_ansi[i] = ToStr(argv[i]);
+	}
+
+	main(argc, argv_ansi);
+
+	return 0;
 }
